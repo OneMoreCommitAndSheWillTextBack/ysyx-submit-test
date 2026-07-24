@@ -88,18 +88,28 @@ jobs:
           fi
           tenant_access_token="$(jq -r '.tenant_access_token' <<<"$token_response")"
 
-          update_response="$(
-            curl --silent --show-error --fail-with-body \
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
+          if ! http_status="$(
+            curl --silent --show-error \
               --retry 3 --retry-all-errors \
+              --output "$response_file" \
+              --write-out '%{http_code}' \
               --request PUT \
               --header "Authorization: Bearer $tenant_access_token" \
               --header 'Content-Type: application/json; charset=utf-8' \
               --data "$(jq -cn --arg status "$FINAL_STATUS" \
                 '{fields: {"状态": $status}}')" \
               "https://open.feishu.cn/open-apis/bitable/v1/apps/${LARK_BASE_TOKEN}/tables/${LARK_BASE_TABLE_ID}/records/${RECORD_ID}"
-          )"
+          )"; then
+            echo "The Feishu Base request failed at the transport layer."
+            exit 1
+          fi
+          update_response="$(<"$response_file")"
 
-          if [[ "$(jq -r '.code' <<<"$update_response")" != "0" ]]; then
-            echo "Feishu Base rejected the status update."
+          response_code="$(jq -r '.code // "unknown"' <<<"$update_response")"
+          if [[ ! "$http_status" =~ ^2 ]] || [[ "$response_code" != "0" ]]; then
+            response_message="$(jq -r '.msg // "unknown error"' <<<"$update_response")"
+            echo "Feishu Base rejected the status update: HTTP $http_status, code $response_code, message $response_message"
             exit 1
           fi
