@@ -2,7 +2,8 @@ name: Auto-test Workflow
 
 run-name: >-
   CI | ysyx_${{ inputs.stuid || 'issue' }} |
-  base_record_id=${{ inputs.base_record_id || 'none' }}
+  ${{ inputs.base_record_id || 'none' }} |
+  ${{ inputs.remark || '' }}
 
 on:
   issues:
@@ -28,6 +29,11 @@ on:
         type: boolean
       base_record_id:
         description: Feishu Base record ID used for status synchronization
+        required: false
+        default: ''
+        type: string
+      remark:
+        description: Optional note displayed in the Workflow Run title
         required: false
         default: ''
         type: string

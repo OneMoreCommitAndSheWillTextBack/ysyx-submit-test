@@ -16,7 +16,8 @@ jobs:
   sync:
     if: >-
       github.event.workflow_run.event == 'workflow_dispatch' &&
-      contains(github.event.workflow_run.display_title, 'base_record_id=rec')
+      startsWith(github.event.workflow_run.display_title, 'CI | ysyx_') &&
+      contains(github.event.workflow_run.display_title, ' | rec')
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
@@ -25,11 +26,12 @@ jobs:
         env:
           RUN_NAME: ${{ github.event.workflow_run.display_title }}
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          COMPLETED_AT: ${{ github.event.workflow_run.updated_at }}
         shell: bash
         run: |
           set -euo pipefail
 
-          if [[ "$RUN_NAME" =~ base_record_id=(rec[A-Za-z0-9]+) ]]; then
+          if [[ "$RUN_NAME" =~ ^CI\ \|\ ysyx_[^|]+\ \|\ (rec[A-Za-z0-9]+)\ \| ]]; then
             record_id="${BASH_REMATCH[1]}"
           else
             echo "Workflow run name does not contain a valid Base record ID."
@@ -44,6 +46,7 @@ jobs:
 
           echo "record_id=$record_id" >> "$GITHUB_OUTPUT"
           echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "completed_at=$(date --date="$COMPLETED_AT" +%s000)" >> "$GITHUB_OUTPUT"
 
       - name: Update Feishu Base record
         env:
@@ -53,6 +56,7 @@ jobs:
           LARK_BASE_TABLE_ID: ${{ secrets.LARK_BASE_TABLE_ID }}
           RECORD_ID: ${{ steps.submission.outputs.record_id }}
           FINAL_STATUS: ${{ steps.submission.outputs.status }}
+          COMPLETED_AT: ${{ steps.submission.outputs.completed_at }}
         shell: bash
         run: |
           set -euo pipefail
@@ -98,8 +102,10 @@ jobs:
               --request PUT \
               --header "Authorization: Bearer $tenant_access_token" \
               --header 'Content-Type: application/json; charset=utf-8' \
-              --data "$(jq -cn --arg status "$FINAL_STATUS" \
-                '{fields: {"状态": $status}}')" \
+              --data "$(jq -cn \
+                --arg status "$FINAL_STATUS" \
+                --argjson completed_at "$COMPLETED_AT" \
+                '{fields: {"状态": $status, "完成时间": $completed_at}}')" \
               "https://open.feishu.cn/open-apis/bitable/v1/apps/${LARK_BASE_TOKEN}/tables/${LARK_BASE_TABLE_ID}/records/${RECORD_ID}"
           )"; then
             echo "The Feishu Base request failed at the transport layer."
