@@ -3,6 +3,25 @@ name: Auto-test Workflow
 on:
   issues:
     types: [opened, edited]
+  workflow_dispatch:
+    inputs:
+      stuid:
+        description: Student ID
+        required: true
+        type: string
+      repo:
+        description: Student repository URL
+        required: true
+        type: string
+      branch:
+        description: Student repository branch
+        required: true
+        type: string
+      no_parallel:
+        description: Disable parallel compilation
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   issues: write
@@ -18,9 +37,11 @@ jobs:
       REPO:   ${{ steps.parse.outputs.REPO }}
       BRANCH: ${{ steps.parse.outputs.BRANCH }}
       MAKEJOBS: ${{ steps.parse.outputs.MAKEJOBS }}
+      ISSUE_NUMBER: ${{ steps.parse.outputs.ISSUE_NUMBER }}
       COMMENT_ID: ${{ steps.comment-id.outputs.COMMENT_ID }}
     steps:
       - name: Print issue details
+        if: github.event_name == 'issues'
         run: |
           echo "🆕 New Issue Created"
           echo "---------------------"
@@ -32,43 +53,66 @@ jobs:
           echo "${{ github.event.issue.body }}"  # 直接输出issue正文
       - name: Parse information
         id: parse
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          DISPATCH_STUID: ${{ inputs.stuid }}
+          DISPATCH_REPO: ${{ inputs.repo }}
+          DISPATCH_BRANCH: ${{ inputs.branch }}
+          DISPATCH_NO_PARALLEL: ${{ inputs.no_parallel }}
         run: |
-          STUID=$(echo "${{ github.event.issue.body }}" | sed -n -e '3p')
-          REPO=$(echo "${{ github.event.issue.body }}" | sed -n -e '7p')
-          BRANCH=$(echo "${{ github.event.issue.body }}" | sed -n -e '11p')
+          if [[ "${{ github.event_name }}" == "issues" ]]; then
+            STUID=$(echo "$ISSUE_BODY" | sed -n -e '3p')
+            REPO=$(echo "$ISSUE_BODY" | sed -n -e '7p')
+            BRANCH=$(echo "$ISSUE_BODY" | sed -n -e '11p')
+            MAKEJOBS=1
+            if echo "$ISSUE_BODY" | sed -n -e '19p' | grep '^- \[ \] ' ; then
+              MAKEJOBS=$(nproc)
+            fi
+            echo "ISSUE_NUMBER=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
+          else
+            STUID="$DISPATCH_STUID"
+            REPO="$DISPATCH_REPO"
+            BRANCH="$DISPATCH_BRANCH"
+            if [[ "$DISPATCH_NO_PARALLEL" == "true" ]]; then
+              MAKEJOBS=1
+            else
+              MAKEJOBS=$(nproc)
+            fi
+          fi
+
           echo "STUID=$STUID" >> $GITHUB_OUTPUT
           echo "REPO=$REPO" >> $GITHUB_OUTPUT
           echo "BRANCH=$BRANCH" >> $GITHUB_OUTPUT
+          echo "MAKEJOBS=$MAKEJOBS" >> $GITHUB_OUTPUT
 
           sudo timedatectl set-timezone Asia/Shanghai
           DATE=`date +"%F %T.%N"`
-          COMMENT=$(echo "${{ github.event.issue.body }}" | sed -n -e '15p')
+          COMMENT=$(echo "$ISSUE_BODY" | sed -n -e '15p')
           RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           echo "DATE=$DATE" >> $GITHUB_OUTPUT
           echo "COMMENT=$COMMENT" >> $GITHUB_OUTPUT
           echo "RUN_URL=$RUN_URL" >> $GITHUB_OUTPUT
 
-          MAKEJOBS=1
-          if echo "${{ github.event.issue.body }}" | sed -n -e '19p' | grep '^- \[ \] ' ; then
-            MAKEJOBS=`nproc`
-          fi
-          echo "MAKEJOBS=$MAKEJOBS" >> $GITHUB_OUTPUT
       - name: Comment the issue
+        if: github.event_name == 'issues'
         uses: peter-evans/create-or-update-comment@v1
         with:
-          issue-number: ${{ github.event.issue.number }}
+          issue-number: ${{ steps.parse.outputs.ISSUE_NUMBER }}
           body: |
             Workflow starts at ${{ steps.parse.outputs.DATE }}
             Comment - ${{ steps.parse.outputs.COMMENT }}
             Workflow URL - ${{ steps.parse.outputs.RUN_URL }}
       - name: Find Comment
+        if: github.event_name == 'issues'
         uses: peter-evans/find-comment@v3
         id: fc
         with:
-          issue-number: ${{ github.event.issue.number }}
+          issue-number: ${{ steps.parse.outputs.ISSUE_NUMBER }}
           comment-author: 'github-actions[bot]'
           body-includes: Workflow starts at ${{ steps.parse.outputs.DATE }}
       - name: Export comment ID
+        if: github.event_name == 'issues'
         id: comment-id
         run: |
           COMMENT_ID=${{ steps.fc.outputs.comment-id }}
@@ -185,9 +229,10 @@ jobs:
           rm log.txt
 
       - name: Comment the issue
+        if: github.event_name == 'issues'
         uses: peter-evans/create-or-update-comment@v4
         with:
-          issue-number: ${{ github.event.issue.number }}
+          issue-number: ${{ needs.parse.outputs.ISSUE_NUMBER }}
           comment-id: ${{ needs.parse.outputs.COMMENT_ID }}
           body: |
             +++++ tracer-ysyx +++++
@@ -245,9 +290,9 @@ jobs:
             false
           fi
 
-      - name: Cache oss-cad-suite
+      - name: Restore oss-cad-suite
         id: oss-cad-suite-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: oss-cad-suite
           key: ${{ runner.os }}-oss-cad-suite-${{ env.OSS_CAD_SUITE_RELEASE_TAG }}
@@ -263,6 +308,13 @@ jobs:
           ASSET_NAME=$(gh release view $TAG --repo YosysHQ/oss-cad-suite-build --json assets --jq ".assets[] | select(.name | contains(\"linux-x64\")) | .name")   
           gh release download $TAG --repo YosysHQ/oss-cad-suite-build --pattern "$ASSET_NAME"
           tar xf $ASSET_NAME
+
+      - name: Save oss-cad-suite
+        if: github.event_name == 'workflow_dispatch' && steps.oss-cad-suite-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: oss-cad-suite
+          key: ${{ runner.os }}-oss-cad-suite-${{ env.OSS_CAD_SUITE_RELEASE_TAG }}
 
       - name: Setup tools
         run: |
@@ -289,19 +341,19 @@ jobs:
           SOC_REV=$(git ls-remote https://github.com/OSCPU/ysyxSoC.git ysyx6 | cut -f1)
           echo "tag=$SOC_REV" >> $GITHUB_OUTPUT
 
-      - name: Cache ysyxSoC verilog
+      - name: Restore ysyxSoC verilog
         id: soc-verilog-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           # 不能直接缓存到 $YSYX_HOME，因为其路径包含了 Set YSYX_HOME step 自动生成的 tmp.xxx 目录，会导致缓存版本不一样无法命中
           # https://github.com/actions/cache?tab=readme-ov-file#cache-version
           path: ysyxSoC-verilog
           key: ${{ runner.os }}-soc-verilog-${{ needs.parse.outputs.STUID }}-${{ steps.soc-tag.outputs.tag }}-${{ hashFiles('**/ysyx-workbench/patch/ysyxSoC/*') }}
 
-      - name: Cache inited ysyxSoC
+      - name: Restore inited ysyxSoC
         id: soc-cache
         if: steps.soc-verilog-cache.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ysyxSoC-inited
           key: ${{ runner.os }}-soc-inited-${{ steps.soc-tag.outputs.tag }}
@@ -318,6 +370,13 @@ jobs:
           cd ysyxSoC-inited
           make dev-init
           mill __.compile
+
+      - name: Save inited ysyxSoC
+        if: github.event_name == 'workflow_dispatch' && steps.soc-verilog-cache.outputs.cache-hit != 'true' && steps.soc-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ysyxSoC-inited
+          key: ${{ runner.os }}-soc-inited-${{ steps.soc-tag.outputs.tag }}
 
       - name: Patch ysyxSoC
         run: |
@@ -404,6 +463,13 @@ jobs:
             mkdir -p $CACHED_SOC_VERILOG_DIR
             cp -a $YSYX_HOME/ysyxSoC/build/. $CACHED_SOC_VERILOG_DIR
           fi
+
+      - name: Save ysyxSoC verilog
+        if: github.event_name == 'workflow_dispatch' && steps.soc-verilog-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ysyxSoC-verilog
+          key: ${{ runner.os }}-soc-verilog-${{ needs.parse.outputs.STUID }}-${{ steps.soc-tag.outputs.tag }}-${{ hashFiles('**/ysyx-workbench/patch/ysyxSoC/*') }}
 
       - name: Upload verilog file
         uses: actions/upload-artifact@v4
@@ -798,12 +864,13 @@ jobs:
 
   finish:
     needs: [parse, push-code]
+    if: github.event_name == 'issues'
     runs-on: ubuntu-22.04
     steps:
       - name: Comment the issue
         uses: peter-evans/create-or-update-comment@v4
         with:
-          issue-number: ${{ github.event.issue.number }}
+          issue-number: ${{ needs.parse.outputs.ISSUE_NUMBER }}
           comment-id: ${{ needs.parse.outputs.COMMENT_ID }}
           body: |
             Finish
@@ -812,17 +879,17 @@ jobs:
       - name: Close the issue
         uses: peter-evans/close-issue@v2
         with:
-          issue-number: ${{ github.event.issue.number }}
+          issue-number: ${{ needs.parse.outputs.ISSUE_NUMBER }}
 
   error-handler:
     runs-on: ubuntu-22.04
     needs: [parse, setup, hello, cpu-tests, riscv-tests, riscv-arch-test, microbench, rt-thread, iverilog-microbench, yosys-sta, iverilog-netlist-microbench, more-tests, push-code]
-    if: ${{ failure() }}
+    if: ${{ failure() && github.event_name == 'issues' }}
     steps:
       - name: Comment the issue
         uses: peter-evans/create-or-update-comment@v4
         with:
-          issue-number: ${{ github.event.issue.number }}
+          issue-number: ${{ needs.parse.outputs.ISSUE_NUMBER }}
           comment-id: ${{ needs.parse.outputs.COMMENT_ID }}
           body: |
             End with errors
