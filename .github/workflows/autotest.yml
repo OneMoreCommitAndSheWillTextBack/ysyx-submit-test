@@ -1,5 +1,9 @@
 name: Auto-test Workflow
 
+run-name: >-
+  Auto-test | stuid=${{ inputs.stuid || 'issue' }} |
+  base_record_id=${{ inputs.base_record_id || 'none' }}
+
 on:
   issues:
     types: [opened, edited]
@@ -22,6 +26,11 @@ on:
         required: false
         default: false
         type: boolean
+      base_record_id:
+        description: Feishu Base record ID used for status synchronization
+        required: false
+        default: ''
+        type: string
 
 permissions:
   issues: write
