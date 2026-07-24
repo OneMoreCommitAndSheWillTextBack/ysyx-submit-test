@@ -1,7 +1,7 @@
 name: Auto-test Workflow
 
 run-name: >-
-  Auto-test | stuid=${{ inputs.stuid || 'issue' }} |
+  CI | ysyx_${{ inputs.stuid || 'issue' }} |
   base_record_id=${{ inputs.base_record_id || 'none' }}
 
 on:

@@ -81,7 +81,9 @@ jobs:
           )"
 
           if [[ "$(jq -r '.code' <<<"$token_response")" != "0" ]]; then
-            echo "Failed to obtain a Feishu tenant access token."
+            error_code="$(jq -r '.code // "unknown"' <<<"$token_response")"
+            error_message="$(jq -r '.msg // "unknown error"' <<<"$token_response")"
+            echo "Failed to obtain a Feishu tenant access token: $error_code $error_message"
             exit 1
           fi
           tenant_access_token="$(jq -r '.tenant_access_token' <<<"$token_response")"
