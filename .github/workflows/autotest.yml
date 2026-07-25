@@ -52,7 +52,6 @@ jobs:
       REPO:   ${{ steps.parse.outputs.REPO }}
       BRANCH: ${{ steps.parse.outputs.BRANCH }}
       MAKEJOBS: ${{ steps.parse.outputs.MAKEJOBS }}
-      ISSUE_NUMBER: ${{ steps.parse.outputs.ISSUE_NUMBER }}
       COMMENT_ID: ${{ steps.comment-id.outputs.COMMENT_ID }}
     steps:
       - name: Print issue details
@@ -70,7 +69,6 @@ jobs:
         id: parse
         env:
           ISSUE_BODY: ${{ github.event.issue.body }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
           DISPATCH_STUID: ${{ inputs.stuid }}
           DISPATCH_REPO: ${{ inputs.repo }}
           DISPATCH_BRANCH: ${{ inputs.branch }}
@@ -84,7 +82,6 @@ jobs:
             if echo "$ISSUE_BODY" | sed -n -e '19p' | grep '^- \[ \] ' ; then
               MAKEJOBS=$(nproc)
             fi
-            echo "ISSUE_NUMBER=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
           else
             STUID="$DISPATCH_STUID"
             REPO="$DISPATCH_REPO"
@@ -113,7 +110,7 @@ jobs:
         if: github.event_name == 'issues'
         uses: peter-evans/create-or-update-comment@v1
         with:
-          issue-number: ${{ steps.parse.outputs.ISSUE_NUMBER }}
+          issue-number: ${{ github.event.issue.number }}
           body: |
             Workflow starts at ${{ steps.parse.outputs.DATE }}
             Comment - ${{ steps.parse.outputs.COMMENT }}
@@ -123,7 +120,7 @@ jobs:
         uses: peter-evans/find-comment@v3
         id: fc
         with:
-          issue-number: ${{ steps.parse.outputs.ISSUE_NUMBER }}
+          issue-number: ${{ github.event.issue.number }}
           comment-author: 'github-actions[bot]'
           body-includes: Workflow starts at ${{ steps.parse.outputs.DATE }}
       - name: Export comment ID
@@ -247,7 +244,7 @@ jobs:
         if: github.event_name == 'issues'
         uses: peter-evans/create-or-update-comment@v4
         with:
-          issue-number: ${{ needs.parse.outputs.ISSUE_NUMBER }}
+          issue-number: ${{ github.event.issue.number }}
           comment-id: ${{ needs.parse.outputs.COMMENT_ID }}
           body: |
             +++++ tracer-ysyx +++++
@@ -305,9 +302,9 @@ jobs:
             false
           fi
 
-      - name: Restore oss-cad-suite
+      - name: Cache oss-cad-suite
         id: oss-cad-suite-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache@v4
         with:
           path: oss-cad-suite
           key: ${{ runner.os }}-oss-cad-suite-${{ env.OSS_CAD_SUITE_RELEASE_TAG }}
@@ -323,13 +320,6 @@ jobs:
           ASSET_NAME=$(gh release view $TAG --repo YosysHQ/oss-cad-suite-build --json assets --jq ".assets[] | select(.name | contains(\"linux-x64\")) | .name")   
           gh release download $TAG --repo YosysHQ/oss-cad-suite-build --pattern "$ASSET_NAME"
           tar xf $ASSET_NAME
-
-      - name: Save oss-cad-suite
-        if: github.event_name == 'workflow_dispatch' && steps.oss-cad-suite-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: oss-cad-suite
-          key: ${{ runner.os }}-oss-cad-suite-${{ env.OSS_CAD_SUITE_RELEASE_TAG }}
 
       - name: Setup tools
         run: |
@@ -356,19 +346,19 @@ jobs:
           SOC_REV=$(git ls-remote https://github.com/OSCPU/ysyxSoC.git ysyx6 | cut -f1)
           echo "tag=$SOC_REV" >> $GITHUB_OUTPUT
 
-      - name: Restore ysyxSoC verilog
+      - name: Cache ysyxSoC verilog
         id: soc-verilog-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache@v4
         with:
           # 不能直接缓存到 $YSYX_HOME，因为其路径包含了 Set YSYX_HOME step 自动生成的 tmp.xxx 目录，会导致缓存版本不一样无法命中
           # https://github.com/actions/cache?tab=readme-ov-file#cache-version
           path: ysyxSoC-verilog
           key: ${{ runner.os }}-soc-verilog-${{ needs.parse.outputs.STUID }}-${{ steps.soc-tag.outputs.tag }}-${{ hashFiles('**/ysyx-workbench/patch/ysyxSoC/*') }}
 
-      - name: Restore inited ysyxSoC
+      - name: Cache inited ysyxSoC
         id: soc-cache
         if: steps.soc-verilog-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@v4
+        uses: actions/cache@v4
         with:
           path: ysyxSoC-inited
           key: ${{ runner.os }}-soc-inited-${{ steps.soc-tag.outputs.tag }}
@@ -385,13 +375,6 @@ jobs:
           cd ysyxSoC-inited
           make dev-init
           mill __.compile
-
-      - name: Save inited ysyxSoC
-        if: github.event_name == 'workflow_dispatch' && steps.soc-verilog-cache.outputs.cache-hit != 'true' && steps.soc-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ysyxSoC-inited
-          key: ${{ runner.os }}-soc-inited-${{ steps.soc-tag.outputs.tag }}
 
       - name: Patch ysyxSoC
         run: |
@@ -478,13 +461,6 @@ jobs:
             mkdir -p $CACHED_SOC_VERILOG_DIR
             cp -a $YSYX_HOME/ysyxSoC/build/. $CACHED_SOC_VERILOG_DIR
           fi
-
-      - name: Save ysyxSoC verilog
-        if: github.event_name == 'workflow_dispatch' && steps.soc-verilog-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ysyxSoC-verilog
-          key: ${{ runner.os }}-soc-verilog-${{ needs.parse.outputs.STUID }}-${{ steps.soc-tag.outputs.tag }}-${{ hashFiles('**/ysyx-workbench/patch/ysyxSoC/*') }}
 
       - name: Upload verilog file
         uses: actions/upload-artifact@v4
@@ -885,7 +861,7 @@ jobs:
       - name: Comment the issue
         uses: peter-evans/create-or-update-comment@v4
         with:
-          issue-number: ${{ needs.parse.outputs.ISSUE_NUMBER }}
+          issue-number: ${{ github.event.issue.number }}
           comment-id: ${{ needs.parse.outputs.COMMENT_ID }}
           body: |
             Finish
@@ -894,7 +870,7 @@ jobs:
       - name: Close the issue
         uses: peter-evans/close-issue@v2
         with:
-          issue-number: ${{ needs.parse.outputs.ISSUE_NUMBER }}
+          issue-number: ${{ github.event.issue.number }}
 
   error-handler:
     runs-on: ubuntu-22.04
@@ -904,7 +880,7 @@ jobs:
       - name: Comment the issue
         uses: peter-evans/create-or-update-comment@v4
         with:
-          issue-number: ${{ needs.parse.outputs.ISSUE_NUMBER }}
+          issue-number: ${{ github.event.issue.number }}
           comment-id: ${{ needs.parse.outputs.COMMENT_ID }}
           body: |
             End with errors
