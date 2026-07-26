@@ -1,7 +1,7 @@
 name: Auto-test Workflow
 
 run-name: >-
-  CI | ysyx_${{ inputs.stuid || 'issue' }} |
+  CI | ${{ startsWith(inputs.stuid, 'ysyx_') && inputs.stuid || format('ysyx_{0}', inputs.stuid || 'issue') }} |
   ${{ inputs.base_record_id || 'none' }} |
   ${{ inputs.remark || '' }}
 
@@ -101,6 +101,12 @@ jobs:
             else
               MAKEJOBS=$(nproc)
             fi
+          fi
+
+          STUID="${STUID#ysyx_}"
+          if [[ ! "$STUID" =~ ^[0-9]{8}$ ]]; then
+            echo "Invalid student ID. Expected XXXXXXXX or ysyx_XXXXXXXX."
+            false
           fi
 
           echo "STUID=$STUID" >> $GITHUB_OUTPUT
