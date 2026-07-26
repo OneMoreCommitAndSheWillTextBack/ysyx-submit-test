@@ -27,6 +27,11 @@ on:
         required: false
         default: false
         type: boolean
+      skip_more_tests:
+        description: Skip more-tests and do not save the submission branch
+        required: false
+        default: false
+        type: boolean
       base_record_id:
         description: Feishu Base record ID used for status synchronization
         required: false
@@ -775,6 +780,7 @@ jobs:
 
   more-tests:
     needs: [setup, hello, cpu-tests, riscv-tests, riscv-arch-test, microbench, rt-thread, iverilog-microbench, yosys-sta, iverilog-netlist-microbench]
+    if: ${{ !inputs.skip_more_tests }}
     runs-on: self-hosted
     steps:
       - name: Download verilog file
@@ -788,6 +794,7 @@ jobs:
 
   push-code:
     needs: [parse, setup, more-tests]
+    if: ${{ !inputs.skip_more_tests }}
     runs-on: ubuntu-22.04
     permissions:
       contents: write  # 关键：授予写入权限
