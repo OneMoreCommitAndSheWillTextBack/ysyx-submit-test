@@ -2,7 +2,6 @@ name: Auto-test Workflow
 
 run-name: >-
   CI | ${{ startsWith(inputs.stuid, 'ysyx_') && inputs.stuid || format('ysyx_{0}', inputs.stuid || 'issue') }} |
-  ${{ inputs.base_record_id || 'none' }} |
   ${{ inputs.remark || '' }}
 
 on:
@@ -38,7 +37,7 @@ on:
         default: false
         type: boolean
       base_record_id:
-        description: Feishu Base record ID used for status synchronization
+        description: Deprecated compatibility input; no longer used in the run title
         required: false
         default: ''
         type: string
