@@ -1,0 +1,77 @@
+name: Notify Feishu Workflow
+
+on:
+  workflow_run:
+    workflows:
+      - Auto-test Workflow
+    types:
+      - completed
+
+permissions: {}
+
+jobs:
+  notify:
+    name: Deliver workflow_run webhook
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Deliver authenticated webhook with retries
+        shell: bash
+        env:
+          WEBHOOK_URL: ${{ secrets.FEISHU_WORKFLOW_WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.FEISHU_WORKFLOW_WEBHOOK_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${WEBHOOK_URL}" || -z "${WEBHOOK_SECRET}" ]]; then
+            echo "::error::Feishu webhook URL or secret is not configured"
+            exit 1
+          fi
+
+          max_attempts=10
+          attempt=1
+          delay=2
+
+          while (( attempt <= max_attempts )); do
+            echo "Delivering workflow_run webhook (attempt ${attempt}/${max_attempts})"
+
+            http_code="$(
+              curl \
+                --silent \
+                --show-error \
+                --output response.json \
+                --write-out '%{http_code}' \
+                --connect-timeout 15 \
+                --max-time 45 \
+                --request POST \
+                --header 'Content-Type: application/json' \
+                --header "Authorization: Bearer ${WEBHOOK_SECRET}" \
+                --header 'User-Agent: GitHub-Actions/feishu-workflow-retry' \
+                --header 'X-GitHub-Event: workflow_run' \
+                --header "X-GitHub-Delivery: ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+                --data-binary "@${GITHUB_EVENT_PATH}" \
+                "${WEBHOOK_URL}"
+            )" && curl_status=0 || curl_status=$?
+
+            if [[ "${curl_status}" -eq 0 && "${http_code}" =~ ^2[0-9][0-9]$ ]]; then
+              echo "Webhook accepted with HTTP ${http_code}"
+              exit 0
+            fi
+
+            echo "::warning::Webhook attempt ${attempt} failed (curl=${curl_status}, HTTP=${http_code:-000})"
+
+            if (( attempt == max_attempts )); then
+              echo "::error::Webhook delivery failed after ${max_attempts} attempts"
+              exit 1
+            fi
+
+            sleep "${delay}"
+            attempt=$((attempt + 1))
+            if (( delay < 30 )); then
+              delay=$((delay * 2))
+              if (( delay > 30 )); then
+                delay=30
+              fi
+            fi
+          done

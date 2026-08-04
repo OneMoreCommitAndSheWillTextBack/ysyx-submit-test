@@ -1,11 +1,52 @@
 name: Auto-test Workflow
 
+run-name: >-
+  CI | ${{ startsWith(inputs.stuid, 'ysyx_') && inputs.stuid || format('ysyx_{0}', inputs.stuid) }} |
+  ${{ inputs.remark || '' }}
+
 on:
-  issues:
-    types: [opened, edited]
+  workflow_dispatch:
+    inputs:
+      stuid:
+        description: Student ID
+        required: true
+        type: string
+      repo:
+        description: Student repository URL
+        required: true
+        type: string
+      branch:
+        description: Student repository branch
+        required: true
+        type: string
+      no_parallel:
+        description: Disable parallel compilation
+        required: false
+        default: false
+        type: boolean
+      skip_more_tests:
+        description: Skip more-tests and do not save the submission branch
+        required: false
+        default: false
+        type: boolean
+      skip_long_running_jobs:
+        description: Skip long-running tests and do not save the submission branch
+        required: false
+        default: false
+        type: boolean
+      base_record_id:
+        description: Deprecated compatibility input; no longer used in the run title
+        required: false
+        default: ''
+        type: string
+      remark:
+        description: Optional note displayed in the Workflow Run title
+        required: false
+        default: ''
+        type: string
 
 permissions:
-  issues: write
+  contents: write
 
 env:
   OSS_CAD_SUITE_RELEASE_TAG: 2025-11-24
@@ -18,61 +59,34 @@ jobs:
       REPO:   ${{ steps.parse.outputs.REPO }}
       BRANCH: ${{ steps.parse.outputs.BRANCH }}
       MAKEJOBS: ${{ steps.parse.outputs.MAKEJOBS }}
-      COMMENT_ID: ${{ steps.comment-id.outputs.COMMENT_ID }}
     steps:
-      - name: Print issue details
-        run: |
-          echo "🆕 New Issue Created"
-          echo "---------------------"
-          echo "📌 Title: ${{ github.event.issue.title }}"
-          echo "👤 Author: ${{ github.event.issue.user.login }}"
-          echo "🔗 URL: ${{ github.event.issue.html_url }}"
-          echo ""
-          echo "📝 Body Content:"
-          echo "${{ github.event.issue.body }}"  # 直接输出issue正文
       - name: Parse information
         id: parse
+        env:
+          DISPATCH_STUID: ${{ inputs.stuid }}
+          DISPATCH_REPO: ${{ inputs.repo }}
+          DISPATCH_BRANCH: ${{ inputs.branch }}
+          DISPATCH_NO_PARALLEL: ${{ inputs.no_parallel }}
         run: |
-          STUID=$(echo "${{ github.event.issue.body }}" | sed -n -e '3p')
-          REPO=$(echo "${{ github.event.issue.body }}" | sed -n -e '7p')
-          BRANCH=$(echo "${{ github.event.issue.body }}" | sed -n -e '11p')
+          STUID="$DISPATCH_STUID"
+          REPO="$DISPATCH_REPO"
+          BRANCH="$DISPATCH_BRANCH"
+          if [[ "$DISPATCH_NO_PARALLEL" == "true" ]]; then
+            MAKEJOBS=1
+          else
+            MAKEJOBS=$(nproc)
+          fi
+
+          STUID="${STUID#ysyx_}"
+          if [[ ! "$STUID" =~ ^[0-9]{8}$ ]]; then
+            echo "Invalid student ID. Expected XXXXXXXX or ysyx_XXXXXXXX."
+            false
+          fi
+
           echo "STUID=$STUID" >> $GITHUB_OUTPUT
           echo "REPO=$REPO" >> $GITHUB_OUTPUT
           echo "BRANCH=$BRANCH" >> $GITHUB_OUTPUT
-
-          sudo timedatectl set-timezone Asia/Shanghai
-          DATE=`date +"%F %T.%N"`
-          COMMENT=$(echo "${{ github.event.issue.body }}" | sed -n -e '15p')
-          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          echo "DATE=$DATE" >> $GITHUB_OUTPUT
-          echo "COMMENT=$COMMENT" >> $GITHUB_OUTPUT
-          echo "RUN_URL=$RUN_URL" >> $GITHUB_OUTPUT
-
-          MAKEJOBS=1
-          if echo "${{ github.event.issue.body }}" | sed -n -e '19p' | grep '^- \[ \] ' ; then
-            MAKEJOBS=`nproc`
-          fi
           echo "MAKEJOBS=$MAKEJOBS" >> $GITHUB_OUTPUT
-      - name: Comment the issue
-        uses: peter-evans/create-or-update-comment@v1
-        with:
-          issue-number: ${{ github.event.issue.number }}
-          body: |
-            Workflow starts at ${{ steps.parse.outputs.DATE }}
-            Comment - ${{ steps.parse.outputs.COMMENT }}
-            Workflow URL - ${{ steps.parse.outputs.RUN_URL }}
-      - name: Find Comment
-        uses: peter-evans/find-comment@v3
-        id: fc
-        with:
-          issue-number: ${{ github.event.issue.number }}
-          comment-author: 'github-actions[bot]'
-          body-includes: Workflow starts at ${{ steps.parse.outputs.DATE }}
-      - name: Export comment ID
-        id: comment-id
-        run: |
-          COMMENT_ID=${{ steps.fc.outputs.comment-id }}
-          echo "COMMENT_ID=$COMMENT_ID" >> $GITHUB_OUTPUT
 
   setup:
     needs: parse
@@ -145,14 +159,6 @@ jobs:
             false
           fi
 
-      - name: Check student ID in whitelist
-        run: |
-          wget https://raw.githubusercontent.com/OSCPU/ysyx-workbench/whitelist/whitelist.txt
-          if ! grep -o $STUID whitelist.txt 2> /dev/null ; then
-            echo "$STUID is not in whitelist. Abort."
-            false
-          fi
-
       - name: Parse git log generated by git tracer
         id: tracer
         run: |
@@ -183,20 +189,6 @@ jobs:
           fi
 
           rm log.txt
-
-      - name: Comment the issue
-        uses: peter-evans/create-or-update-comment@v4
-        with:
-          issue-number: ${{ github.event.issue.number }}
-          comment-id: ${{ needs.parse.outputs.COMMENT_ID }}
-          body: |
-            +++++ tracer-ysyx +++++
-            compile NEMU - ${{ steps.tracer.outputs.NR_COMPILE_NEMU }}
-            run NEMU - ${{ steps.tracer.outputs.NR_RUN_NEMU }}
-            gdb NEMU - ${{ steps.tracer.outputs.NR_GDB_NEMU }}
-            sim RTL - ${{ steps.tracer.outputs.NR_SIM_RTL }}
-            +++++++++++++++++++++++
-          edit-mode: append
 
       - name: Set environment variables
         id: set-env
@@ -484,6 +476,7 @@ jobs:
 
   riscv-arch-test:
     needs: setup
+    if: ${{ !inputs.skip_long_running_jobs }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -678,6 +671,7 @@ jobs:
 
   iverilog-netlist-microbench:
     needs: [parse, setup, yosys-sta]
+    if: ${{ !inputs.skip_long_running_jobs }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -718,6 +712,7 @@ jobs:
 
   more-tests:
     needs: [setup, hello, cpu-tests, riscv-tests, riscv-arch-test, microbench, rt-thread, iverilog-microbench, yosys-sta, iverilog-netlist-microbench]
+    if: ${{ !inputs.skip_more_tests && !inputs.skip_long_running_jobs }}
     runs-on: self-hosted
     steps:
       - name: Download verilog file
@@ -731,6 +726,7 @@ jobs:
 
   push-code:
     needs: [parse, setup, more-tests]
+    if: ${{ !inputs.skip_more_tests && !inputs.skip_long_running_jobs }}
     runs-on: ubuntu-22.04
     permissions:
       contents: write  # 关键：授予写入权限
@@ -795,35 +791,3 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git push origin HEAD:ysyx_${{ needs.parse.outputs.STUID }}
-
-  finish:
-    needs: [parse, push-code]
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Comment the issue
-        uses: peter-evans/create-or-update-comment@v4
-        with:
-          issue-number: ${{ github.event.issue.number }}
-          comment-id: ${{ needs.parse.outputs.COMMENT_ID }}
-          body: |
-            Finish
-          edit-mode: append
-
-      - name: Close the issue
-        uses: peter-evans/close-issue@v2
-        with:
-          issue-number: ${{ github.event.issue.number }}
-
-  error-handler:
-    runs-on: ubuntu-22.04
-    needs: [parse, setup, hello, cpu-tests, riscv-tests, riscv-arch-test, microbench, rt-thread, iverilog-microbench, yosys-sta, iverilog-netlist-microbench, more-tests, push-code]
-    if: ${{ failure() }}
-    steps:
-      - name: Comment the issue
-        uses: peter-evans/create-or-update-comment@v4
-        with:
-          issue-number: ${{ github.event.issue.number }}
-          comment-id: ${{ needs.parse.outputs.COMMENT_ID }}
-          body: |
-            End with errors
-          edit-mode: append

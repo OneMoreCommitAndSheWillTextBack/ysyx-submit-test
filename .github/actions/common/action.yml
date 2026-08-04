@@ -91,4 +91,3 @@ runs:
         git am $YSYX_HOME/patch/rt-thread-am/*
         cd $YSYX_HOME
 
-
